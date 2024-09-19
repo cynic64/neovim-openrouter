@@ -2,73 +2,105 @@ import pynvim
 from core import get_response
 import time
 import logging
+import threading
 
 # Set up logging
-logging.basicConfig(filename='/tmp/nvim_llm_plugin.log', level=logging.ERROR, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    filename='/tmp/nvim_llm_plugin.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 @pynvim.plugin
 class LLMResponsePlugin(object):
     def __init__(self, nvim):
         self.nvim = nvim
         logging.error("LLMResponsePlugin initialized")
+        self.query_buffers = {}  # Keep track of query buffers
 
     @pynvim.function("LLMResponse", sync=False)
     def llm_response(self, args):
         logging.error("llm_response function called")
-        buffer = self.nvim.current.buffer
 
-        # Get the start and end positions of the visual selection
-        start_row, start_col = self.nvim.eval("getpos(\"'<\")[1:2]")
-        end_row, end_col = self.nvim.eval("getpos(\"'>\")[1:2]")
-        logging.error(f"Selection: start({start_row}, {start_col}), end({end_row}, {end_col})")
+        # Create a new scratch buffer
+        buf = self.nvim.api.create_buf(False, True)
 
-        # Get the selected text
-        if start_row == end_row:
-            selected_text = buffer[start_row - 1][start_col - 1:end_col]
-        else:
-            selected_text = "\n".join(
-                buffer[start_row - 1 : end_row]
-            )
-            selected_text = (
-                selected_text[:start_col - 1]
-                + selected_text[-(len(buffer[end_row - 1]) - end_col + 1) :]
-            )
-        logging.error(f"Selected text: {selected_text}")
+        # Set buffer options
+        self.nvim.api.buf_set_option(buf, 'buftype', 'nofile')
+        self.nvim.api.buf_set_option(buf, 'swapfile', False)
+        self.nvim.api.buf_set_option(buf, 'bufhidden', 'wipe')
 
-        # Get the response from the LLM piece by piece
-        current_row = end_row
+        # Open a new window for the buffer at the bottom
+        height = 10  # Adjust the height as needed
+        self.nvim.command(f"botright {height}split")
+        self.nvim.command(f"buffer {buf.number}")
 
-        # Insert two newlines after the selected text
-        self.nvim.command(f'call append({current_row}, "")')
-        self.nvim.command(f'call append({current_row+1}, "")')
+        # Set up a buffer-local key mapping to trigger submission
+        # Map <F5> to call the function LLMSubmitCommand
+        self.nvim.api.buf_set_keymap(
+            buf.number,
+            'n',
+            '<F5>',
+            ':LLMSubmitCommand<CR>',
+            {'nowait': True, 'noremap': True, 'silent': True}
+        )
+        self.nvim.api.buf_set_keymap(
+            buf.number,
+            'i',
+            '<F5>',
+            '<Esc>:LLMSubmitCommand<CR>',
+            {'nowait': True, 'noremap': True, 'silent': True}
+        )
 
-        current_row += 1
+        # Store the buffer number to identify it later
+        self.query_buffers[buf.number] = buf
 
-        for piece in get_response(selected_text):
-            logging.error(f"Received piece: {piece}")
-            
-            # Split the piece into lines
-            lines = piece.split('\n')
-            
-            # Append the first line to the current line
-            current_line = buffer[current_row - 1]
-            buffer[current_row - 1] = current_line + lines[0]
-            
-            # Insert any additional lines
-            if len(lines) > 1:
-                buffer.append(lines[1:], current_row)
-                current_row += len(lines) - 1
-            
-            # Move the cursor to the end of the last inserted line
-            self.nvim.command(f"normal! {current_row}G$")
-            
-            # Force Neovim to update the screen
-            self.nvim.command('redraw')
-            
-            logging.error(f"Appended piece: {piece} ending at row {current_row}")
+        logging.error(f"Opened buffer {buf.number} for input")
 
-            # Small delay to make the output visible
-            time.sleep(0.01)
+    @pynvim.command('LLMSubmitCommand', nargs='*', sync=False)
+    def llm_submit_command(self, args):
+        logging.error("llm_submit_command called")
+        self.llm_submit(args)
 
-        logging.error("llm_response function completed successfully")
+    def llm_submit(self, args):
+        logging.error("llm_submit function called")
+
+        # Get the current buffer (should be the minibuffer)
+        buf = self.nvim.current.buffer
+
+        # Get the text from the buffer
+        query = "\n".join(buf[:])
+
+        logging.error(f"Query: {query}")
+
+        # Function to fetch and display the LLM response
+        def fetch_and_display():
+            response_content = ''  # Accumulate the response pieces here
+
+            for piece in get_response(query):
+                logging.error(f"Received piece: {piece}")
+
+                response_content += piece
+
+                # Since we're in a different thread, schedule buffer updates in the main thread
+                def update_buffer():
+                    # Combine the query, separator, and the response content
+                    buffer_content = query.split('\n') + ['---', ''] + response_content.split('\n')
+
+                    # Replace the entire buffer content
+                    buf[:] = buffer_content
+
+                    # Move the cursor to the end
+                    self.nvim.command(f"normal! G$")
+                    self.nvim.command('redraw')
+
+                    logging.error(f"Updated buffer with response content")
+
+                self.nvim.async_call(update_buffer)
+                # Small delay to make the output visible
+                time.sleep(0.01)
+
+            logging.error("llm_submit function completed successfully")
+
+        # Start a new thread to fetch and display the response
+        threading.Thread(target=fetch_and_display).start()

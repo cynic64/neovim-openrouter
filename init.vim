@@ -15,4 +15,4 @@ colorscheme vim
 
 " My thing
 nnoremap <leader>hw :call HelloWrite()<CR>
-vnoremap <leader>lr :call LLMResponse()<CR>
+nnoremap <leader>lr :call LLMResponse()<CR>
