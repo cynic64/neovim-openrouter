@@ -17,8 +17,8 @@ colorscheme vim
 nnoremap <leader>hw :call HelloWrite()<CR>
 
 " In normal mode, clear register 's' and call LLMResponse
-nnoremap <leader>lr :let @s=""<CR>:call LLMResponse()<CR>
+nnoremap <leader>l :let @s=""<CR>:call LLMResponse()<CR>
 
 " In visual mode, yank selection into register 's' and call LLMResponse
-xnoremap <leader>lr "sy:call LLMResponse()<CR>
+xnoremap <leader>l "sy:call LLMResponse()<CR>
 
