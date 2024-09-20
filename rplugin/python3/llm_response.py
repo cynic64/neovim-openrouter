@@ -17,10 +17,20 @@ class LLMResponsePlugin(object):
         self.nvim = nvim
         logging.error("LLMResponsePlugin initialized")
         self.query_buffers = {}  # Keep track of query buffers
+        self.selected_text = None  # Store selected text if any
 
     @pynvim.function("LLMResponse", sync=False)
     def llm_response(self, args):
         logging.error("llm_response function called")
+
+        # Get the selection from register 's'
+        self.selected_text = self.nvim.funcs.getreg('s')
+        if self.selected_text == '':
+            self.selected_text = None
+            logging.error("No visual selection detected")
+        else:
+            self.selected_text = f"```\n{self.selected_text}\n```"
+            logging.error(f"Selected text: {self.selected_text}")
 
         # Create a new scratch buffer
         buf = self.nvim.api.create_buf(False, True)
@@ -34,6 +44,18 @@ class LLMResponsePlugin(object):
         height = 10  # Adjust the height as needed
         self.nvim.command(f"botright {height}split")
         self.nvim.command(f"buffer {buf.number}")
+
+        # If there is selected text, populate the buffer with it
+        if self.selected_text:
+            initial_content = self.selected_text.split('\n') + ['']
+            buf[:] = initial_content
+            # Move the cursor to the end of the buffer
+            self.nvim.current.window.cursor = (len(initial_content), 0)
+        else:
+            # Ensure the buffer is empty
+            buf[:] = ['']
+            # Cursor at the first line
+            self.nvim.current.window.cursor = (1, 0)
 
         # Set up a buffer-local key mapping to trigger submission
         # Map <F5> to call the function LLMSubmitCommand
@@ -69,23 +91,27 @@ class LLMResponsePlugin(object):
         buf = self.nvim.current.buffer
 
         # Get the text from the buffer
-        query = "\n".join(buf[:])
+        full_query = "\n".join(buf[:])
 
-        logging.error(f"Query: {query}")
+        logging.error(f"Full query from buffer: {full_query}")
 
-        # Function to fetch and display the LLM response
+        # Split the buffer content into lines
+        lines = buf[:]
+
+        # Prepare the content to display in the buffer
+        # We'll separate the query and response with a separator
         def fetch_and_display():
             response_content = ''  # Accumulate the response pieces here
 
-            for piece in get_response(query):
+            for piece in get_response(full_query):
                 logging.error(f"Received piece: {piece}")
 
                 response_content += piece
 
                 # Since we're in a different thread, schedule buffer updates in the main thread
                 def update_buffer():
-                    # Combine the query, separator, and the response content
-                    buffer_content = query.split('\n') + ['---', ''] + response_content.split('\n')
+                    # Build the buffer content to include the separator and response
+                    buffer_content = lines + ['---', ''] + response_content.split('\n')
 
                     # Replace the entire buffer content
                     buf[:] = buffer_content

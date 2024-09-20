@@ -15,4 +15,10 @@ colorscheme vim
 
 " My thing
 nnoremap <leader>hw :call HelloWrite()<CR>
-nnoremap <leader>lr :call LLMResponse()<CR>
+
+" In normal mode, clear register 's' and call LLMResponse
+nnoremap <leader>lr :let @s=""<CR>:call LLMResponse()<CR>
+
+" In visual mode, yank selection into register 's' and call LLMResponse
+xnoremap <leader>lr "sy:call LLMResponse()<CR>
+
