@@ -3,6 +3,7 @@ from core import get_response
 import time
 import logging
 import threading
+import os
 
 # Set up logging
 logging.basicConfig(
@@ -18,6 +19,7 @@ class LLMResponsePlugin(object):
         logging.error("LLMResponsePlugin initialized")
         self.conversation_buffer = None  # Store the conversation buffer number
         self.selected_text = None  # Store selected text if any
+        self.lua_dir = os.path.dirname(os.path.abspath(__file__))
 
     @pynvim.function("LLMResponse", sync=False)
     def llm_response(self, args):
@@ -48,25 +50,40 @@ class LLMResponsePlugin(object):
             self.nvim.api.buf_set_option(buf, 'bufhidden', 'wipe')
 
             # Set up buffer-local key mapping to trigger submission
-            # Map <F5> to call the function LLMSubmitCommand
+            # Map <C-Return> to call the function LLMSubmitCommand
             self.nvim.api.buf_set_keymap(
                 buf.number,
                 'n',
-                '<F5>',
+                '<C-Return>',
                 ':LLMSubmitCommand<CR>',
                 {'nowait': True, 'noremap': True, 'silent': True}
             )
             self.nvim.api.buf_set_keymap(
                 buf.number,
                 'i',
-                '<F5>',
+                '<C-Return>',
                 '<Esc>:LLMSubmitCommand<CR>',
+                {'nowait': True, 'noremap': True, 'silent': True}
+            )
+            # Map <F6> to call the function LLMSelectModel
+            self.nvim.api.buf_set_keymap(
+                buf.number,
+                'n',
+                '<F6>',
+                ':LLMSelectModel<CR>',
+                {'nowait': True, 'noremap': True, 'silent': True}
+            )
+            self.nvim.api.buf_set_keymap(
+                buf.number,
+                'i',
+                '<F6>',
+                '<Esc>:LLMSelectModel<CR>',
                 {'nowait': True, 'noremap': True, 'silent': True}
             )
             logging.error(f"Created new buffer {buf.number} for conversation")
 
         # Open a new window for the buffer at the bottom
-        height = 30  # Adjust the height as needed
+        height = 40  # Adjust the height as needed
         self.nvim.command(f"botright {height}split")
         self.nvim.command(f"buffer {buf.number}")
 
@@ -97,15 +114,16 @@ class LLMResponsePlugin(object):
 
         logging.error(f"Full conversation from buffer: {lines}")
 
-        # Parse the buffer content into messages
-        messages = self.parse_buffer_content(lines)
+        # Parse the buffer content into model and messages
+        model, messages = self.parse_buffer_content(lines)
 
+        logging.error(f"Parsed model: {model}")
         logging.error(f"Parsed messages: {messages}")
 
         # Start a new thread to fetch and display the response
-        threading.Thread(target=self.fetch_and_display, args=(buf, messages)).start()
+        threading.Thread(target=self.fetch_and_display, args=(buf, model, messages)).start()
 
-    def fetch_and_display(self, buf, messages):
+    def fetch_and_display(self, buf, model, messages):
         logging.error("fetch_and_display function started")
         response_content = ''
 
@@ -128,7 +146,7 @@ class LLMResponsePlugin(object):
         self.nvim.async_call(get_response_start_idx)
         time.sleep(0.01)  # Wait to ensure index is retrieved
 
-        for piece in get_response(messages):
+        for piece in get_response(model, messages):
             logging.error(f"Received piece: {piece}")
 
             # Append the piece to the response_content
@@ -166,6 +184,15 @@ class LLMResponsePlugin(object):
         message_content = []
         role = 'user'  # Assume conversation starts with user
         idx = 0
+        model = None
+        # Check for 'MODEL: <model_name>' at the top
+        if lines and lines[0].startswith('MODEL: '):
+            model = lines[0][len('MODEL: '):].strip()
+            idx = 1  # Skip the model line
+            # Skip the empty line after the model line if present
+            if idx < len(lines) and lines[idx].strip() == '':
+                idx += 1
+
         while idx < len(lines):
             line = lines[idx]
             if line.strip() == '---':
@@ -191,4 +218,45 @@ class LLMResponsePlugin(object):
             content = '\n'.join(message_content).strip()
             if content:
                 messages.append({'role': role, 'content': content})
-        return messages
+        return model, messages
+
+    @pynvim.command('LLMSelectModel', nargs='*', sync=False)
+    def llm_select_model_command(self, args):
+        logging.error("llm_select_model_command called")
+        self.llm_select_model(args)
+
+    def llm_select_model(self, args):
+        models = [
+            "google/gemini-pro-1.5-exp",
+            "anthropic/claude-3.5-sonnet",
+            "openai/o1-mini",
+            "openai/o1-preview",
+            # Add more models as needed
+        ]
+
+        # Prepare models for Lua code
+        # Use JSON to safely serialize the list
+        import json
+        models_json = json.dumps(models)
+
+        # Load Lua code from a separate file
+        with open(os.path.join(self.lua_dir, 'select_model.lua'), 'r') as f:
+            lua_code = f.read()
+
+        self.nvim.async_call(lambda: self.nvim.exec_lua(lua_code, models))
+
+    @pynvim.function('LLMModelSelected', sync=False)
+    def llm_model_selected(self, args):
+        selected_model = args[0]
+        # Insert 'MODEL: selected_model' into the minibuffer
+        buf = self.nvim.buffers[self.conversation_buffer]
+        # Insert or replace the model line at the top of the buffer
+        lines = buf[:]
+        model_line = 'MODEL: ' + selected_model
+        if lines and lines[0].startswith('MODEL: '):
+            buf[0] = model_line
+        else:
+            buf[0:0] = [model_line, '']
+        logging.error(f"Model selected: {selected_model}")
+        # Inform the user about the selection
+        self.nvim.out_write(f"Model selected: {selected_model}\n")
