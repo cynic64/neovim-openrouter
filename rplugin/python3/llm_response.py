@@ -49,42 +49,26 @@ class LLMResponsePlugin(object):
             self.nvim.api.buf_set_option(buf, 'swapfile', False)
             self.nvim.api.buf_set_option(buf, 'bufhidden', 'wipe')
 
-            # Set up buffer-local key mapping to trigger submission
-            # Map <C-Return> to call the function LLMSubmitCommand
+            # Set up buffer-local key mapping to trigger submission and model
+            # switching
             self.nvim.api.buf_set_keymap(
                 buf.number,
                 'n',
-                '<C-Return>',
+                '<leader><space>',
                 ':LLMSubmitCommand<CR>',
                 {'nowait': True, 'noremap': True, 'silent': True}
             )
             self.nvim.api.buf_set_keymap(
                 buf.number,
-                'i',
-                '<C-Return>',
-                '<Esc>:LLMSubmitCommand<CR>',
-                {'nowait': True, 'noremap': True, 'silent': True}
-            )
-            # Map <F6> to call the function LLMSelectModel
-            self.nvim.api.buf_set_keymap(
-                buf.number,
                 'n',
-                '<F6>',
+                '<leader>m',
                 ':LLMSelectModel<CR>',
-                {'nowait': True, 'noremap': True, 'silent': True}
-            )
-            self.nvim.api.buf_set_keymap(
-                buf.number,
-                'i',
-                '<F6>',
-                '<Esc>:LLMSelectModel<CR>',
                 {'nowait': True, 'noremap': True, 'silent': True}
             )
             logging.error(f"Created new buffer {buf.number} for conversation")
 
         # Open a new window for the buffer at the bottom
-        height = 40  # Adjust the height as needed
-        self.nvim.command(f"botright {height}split")
+        self.nvim.command(f"botright split")
         self.nvim.command(f"buffer {buf.number}")
 
         # If there is selected text, insert it into the buffer at the end

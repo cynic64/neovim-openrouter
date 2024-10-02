@@ -1,8 +1,10 @@
 import requests
 import json
 import logging
+from pathlib import Path 
 
-with open("/home/void/.config/nvim/rplugin/python3/api_key") as f:
+home_dir = Path.home()
+with open(f"{home_dir}/.config/nvim/rplugin/python3/api_key") as f:
     OPENROUTER_API_KEY = f.read().rstrip()
 
 def get_response(model, messages):

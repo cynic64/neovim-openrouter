@@ -1,5 +1,8 @@
 " Decent ones: koehler evening sorbet torte elflord sorbet wildcharm
 " colorscheme koehler
+set ts=4 sw=4
+let mapleader = " "
+let maplocalleader = " "
 set clipboard=unnamedplus
 
 set nohlsearch
@@ -10,15 +13,9 @@ autocmd FileType javascript setlocal shiftwidth=2 softtabstop=2
 au BufRead,BufNewFile *.vert set filetype=c
 au BufRead,BufNewFile *.frag set filetype=c
 
-" Background matches
-colorscheme vim
-
-" My thing
-nnoremap <leader>hw :call HelloWrite()<CR>
-
 " In normal mode, clear register 's' and call LLMResponse
-nnoremap <leader><Bslash> :let @s=""<CR>:call LLMResponse()<CR>
+nnoremap <leader><space> :let @s=""<CR>:call LLMResponse()<CR>
 
 " In visual mode, yank selection into register 's' and call LLMResponse
-xnoremap <leader><Bslash> "sy:call LLMResponse()<CR>
+xnoremap <leader><space> "sy:call LLMResponse()<CR>
 
