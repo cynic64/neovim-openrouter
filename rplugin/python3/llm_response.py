@@ -31,7 +31,7 @@ class LLMResponsePlugin(object):
             self.selected_text = None
             logging.error("No visual selection detected")
         else:
-            self.selected_text = f"```\n{self.selected_text}\n```"
+            self.selected_text = f"```\n{self.selected_text.rstrip()}\n```"
             logging.error(f"Selected text: {self.selected_text}")
 
         # Check if the conversation buffer exists
@@ -75,6 +75,11 @@ class LLMResponsePlugin(object):
         if self.selected_text:
             # Get current buffer content
             lines = buf[:]
+
+            # Avoid blank initial line
+            if lines[0] == "":
+                lines = lines[1:]
+
             # Split selected text into lines and append
             lines.extend(self.selected_text.split('\n') + [''])
             buf[:] = lines
@@ -211,9 +216,9 @@ class LLMResponsePlugin(object):
 
     def llm_select_model(self, args):
         models = [
-            "google/gemini-pro-1.5-exp",
             "anthropic/claude-3.5-sonnet",
             "openai/o1-mini",
+            "google/gemini-pro-1.5-exp",
             "openai/o1-preview",
             # Add more models as needed
         ]
