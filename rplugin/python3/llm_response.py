@@ -26,12 +26,12 @@ class LLMResponsePlugin(object):
         logging.error("llm_response function called")
 
         # Get the selection from register 's'
-        self.selected_text = self.nvim.funcs.getreg('s')
+        self.selected_text = self.nvim.funcs.getreg('s').rstrip()
         if self.selected_text == '':
             self.selected_text = None
             logging.error("No visual selection detected")
         else:
-            self.selected_text = f"```\n{self.selected_text.rstrip()}\n```"
+            self.selected_text = f"```\n{self.selected_text}\n```"
             logging.error(f"Selected text: {self.selected_text}")
 
         # Check if the conversation buffer exists
