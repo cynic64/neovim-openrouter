@@ -29,9 +29,6 @@ local function render()
     vim.api.nvim_buf_set_option(buf, 'modifiable', true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})  -- Clear buffer
 
-    -- Insert the search prompt
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {"Search: " .. input})
-
     -- Filter models based on input
     local filtered = {}
     for _, model in ipairs(models) do
@@ -44,7 +41,7 @@ local function render()
     if #filtered == 0 then
         table.insert(filtered, "(No matching models)")
     end
-    vim.api.nvim_buf_set_lines(buf, 1, -1, false, filtered)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, filtered)
     vim.api.nvim_buf_set_option(buf, 'modifiable', false)
 
     -- Move cursor to the search input line
@@ -62,10 +59,6 @@ end
 function select_model()
     local cursor = vim.api.nvim_win_get_cursor(win)
     local line_number = cursor[1]
-    if line_number == 1 then
-        -- Don't allow selecting the search prompt
-        return
-    end
     local selected_model = vim.api.nvim_buf_get_lines(buf, line_number - 1, line_number, false)[1]
     if selected_model and selected_model ~= "(No matching models)" then
         close_window()
@@ -73,34 +66,9 @@ function select_model()
     end
 end
 
--- Function to handle backspace
-function backspace()
-    if #input > 0 then
-        input = input:sub(1, -2)
-        render()
-    end
-end
-
--- Function to handle printable characters
-function handle_char(char)
-    -- Only handle printable characters (ASCII 32-126)
-    if char:match("^%c$") then
-        return
-    end
-    input = input .. char
-    render()
-end
-
 -- Key mappings
 vim.api.nvim_buf_set_keymap(buf, 'n', '<Esc>', ':lua close_window()<CR>', {nowait = true, noremap = true, silent = true})
 vim.api.nvim_buf_set_keymap(buf, 'n', '<CR>', ':lua select_model()<CR>', {nowait = true, noremap = true, silent = true})
-vim.api.nvim_buf_set_keymap(buf, 'n', '<BS>', ':lua backspace()<CR>', {nowait = true, noremap = true, silent = true})
-
--- Map all printable characters
-for i = 32, 126 do
-    local char = string.char(i)
-    vim.api.nvim_buf_set_keymap(buf, 'n', char, ':lua handle_char("'..char..'")<CR>', {nowait = true, noremap = true, silent = true})
-end
 
 -- Optional: Map arrow keys for navigation
 vim.api.nvim_buf_set_keymap(buf, 'n', '<Up>', '<Up>', {nowait = true, noremap = true, silent = true})
