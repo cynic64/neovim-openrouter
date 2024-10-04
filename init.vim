@@ -5,6 +5,8 @@ let mapleader = " "
 let maplocalleader = " "
 set clipboard=unnamedplus
 
+source $HOME/.config/nvim/home.vim
+
 set nohlsearch
 set smartindent
 set autoindent
@@ -18,4 +20,3 @@ nnoremap <leader><space> :let @s=""<CR>:call LLMResponse()<CR>
 
 " In visual mode, yank selection into register 's' and call LLMResponse
 xnoremap <leader><space> "sy:call LLMResponse()<CR>
-
