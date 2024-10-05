@@ -7,32 +7,32 @@ import os
 import re
 import textwrap
 
-SYSTEM_PROMPT = """If you suggest changes to code you were given, always use
+SYSTEM_PROMPT = """Source code will always be given to you with line numbers,
+followed by a `|`, followed by the actual line of source code.
+
+Never include line numbers in the code you output.
+
+If you suggest changes to code you were given, always use
 the exactly following format:
---- REPLACE ---
-lines of old code you want to replace
+
+--- REPLACE $START_LINE $END_LINE WITH ---
+your new code you want to replace the old code with
 can be multiple lines
---- WITH ---
-new code you want to replace it with
-can also be multiple lines
+can be more or less lines than the old code
 --- END ---
 
-Note that the "old code" section has to be unique within the code you were
-given. Also, you have to include every line of code you want to replace. So you
-cannot use "..." to skip over lines.
+Replace $START_LINE and $END_LINE with the first and last line (inclusive) you
+want to be replaced with your new code.
 
-If the old code is long (more than around 50 lines), make small individual
-REPLACE statements. You can make multiple.
+You can specify multiple such REPLACE ranges.
 
-If you instead write a piece of code from scratch, still use the template
-above. Just leave the "old code" section blank, and put your code in the "new
-code" section.
+If you weren't given any code to base your response off and are starting from
+scratch, do
 
-However, unless you are starting without any existing code at all (as described
-above), you MUST include enough old code such that I know where to insert your
-new code.
-
-If you want to create a new file, don't use REPLACE.
+-- REPLACE 0 0 WITH ---
+your code here
+maybe multiple lines
+--- END ---
 """
 
 # model name -> (temperature, top_p)
@@ -82,7 +82,14 @@ class LLMResponsePlugin(object):
             self.selected_text = None
             logging.error("No visual selection detected")
         else:
-            self.selected_text = f"```\n{self.selected_text}\n```"
+            # Prepend line numbers to every line
+            numbered_lines = []
+            for i, line in enumerate(self.selected_text.split("\n")):
+                numbered_lines.append(f"{i+1:<5}|{line}")
+
+            numbered_text = "\n".join(numbered_lines)
+            self.selected_text = f"```\n{numbered_text}\n```"
+
             logging.error(f"Selected text: {self.selected_text}")
 
         # Check if the conversation buffer exists
@@ -164,37 +171,6 @@ class LLMResponsePlugin(object):
         # Pass both conversation and code buffers
         threading.Thread(target=self.fetch_and_display, args=(conv_buf, self.code_buffer, model, messages)).start()
 
-    def find_multiline(self, buffer, text_lines):
-        """
-        Search for a sequence of lines in the buffer that matches text_lines, ignoring leading indentation.
-        Returns a tuple (start_index, end_index) if found, else None.
-        """
-        # Dedent the text_lines for comparison
-        dedented_old = [textwrap.dedent(line) for line in text_lines]
-
-        for i in range(len(buffer) - len(dedented_old) + 1):
-            window = buffer[i:i + len(dedented_old)]
-            dedented_window = [textwrap.dedent(line) for line in window]
-            if dedented_window == dedented_old:
-                return (i, i + len(dedented_old))
-        return None
-
-    def count_multiline_matches(self, buffer, text_lines):
-        """
-        Counts how many times a sequence of lines appears in the buffer, ignoring leading indentation.
-        """
-        count = 0
-        dedented_old = [textwrap.dedent(line) for line in text_lines]
-
-        for i in range(len(buffer) - len(dedented_old) + 1):
-            potential_match = buffer[i:i + len(dedented_old)]
-            dedented_potential = [textwrap.dedent(line) for line in potential_match]
-            if dedented_potential == dedented_old:
-                count += 1
-                logging.error(f"|||{potential_match}||| matches |||{text_lines}||| ({i=})")
-
-        return count
-
     def fetch_and_display(self, conv_buf, code_buf, model, messages):
         logging.error("fetch_and_display function started")
         response_content = ''
@@ -239,87 +215,6 @@ class LLMResponsePlugin(object):
             self.nvim.async_call(update_buffer_with_piece)
             time.sleep(0.01)  # Small delay to make the output visible
 
-        # After collecting the full response, process diffs
-        logging.error("Completed fetching full response. Processing diffs if any.")
-
-        # Define the diff pattern
-        diff_pattern = r"--- REPLACE ---\n(.*?)\n--- WITH ---\n(.*?)\n--- END ---"
-        diffs = re.findall(diff_pattern, response_content, re.DOTALL)
-
-        if diffs:
-            logging.error(f"Found {len(diffs)} diff(s) in the response.")
-            for old_code, new_code in diffs:
-                # Clean and split the code blocks into lines
-                old_lines = [line for line in old_code.split('\n')]
-                new_lines = [line for line in new_code.split('\n')]
-
-                logging.error(f"Processing diff:\nOld Code:\n{old_code}\nNew Code:\n{new_code}")
-
-                # Fetch the latest buffer content for the code buffer
-                buffer_content = None
-                def get_code_buffer_content():
-                    nonlocal buffer_content
-                    buffer_content = code_buf[:]
-
-                self.nvim.async_call(get_code_buffer_content)
-                time.sleep(0.01)
-
-                logging.error(f"{buffer_content=}")
-
-                # Find the start and end indices of the old code in the code buffer
-                match = self.find_multiline(buffer_content, old_lines)
-
-                if match is None:
-                    error_msg = f"Error: No match found for the old lines: |||{old_lines}|||"
-                    logging.error(error_msg)
-                    self.nvim.async_call(lambda: self.nvim.err_write(error_msg + "\n"))
-                    continue
-
-                # Ensure only one occurrence exists
-                match_count = self.count_multiline_matches(buffer_content, old_lines)
-                if match_count > 1:
-                    error_msg = f"Error: Multiple matches ({match_count}) found for the old lines: |||{old_lines}|||"
-                    logging.error(error_msg)
-                    self.nvim.async_call(lambda: self.nvim.err_write(error_msg + "\n"))
-                    continue
-
-                start, end = match
-                logging.error(f"Replacing lines {start +1} to {end} with new code.")
-
-                # Determine the indentation from the first line of the old code
-                original_indentation_match = re.match(r'(\s*)', buffer_content[start])
-                original_indentation = original_indentation_match.group(1) if original_indentation_match else ''
-
-                # Adjust the new_lines indentation
-                adjusted_new_lines = []
-                for line in new_lines:
-                    if line.strip() == '':
-                        adjusted_new_lines.append(line)
-                    elif line.lstrip() != line:
-                        # If the line already has indentation, don't add any
-                        adjusted_new_lines.append(line)
-                    else:
-                        # Otherwise, add the original indent back in.
-                        adjusted_new_lines.append(original_indentation + line)
-
-                # Define the replacement function
-                def perform_replace(start_idx=start, end_idx=end, replacement=adjusted_new_lines):
-                    try:
-                        code_buf[start_idx:end_idx] = replacement
-                        self.nvim.command('redraw')
-                        logging.error(f"Successfully replaced lines {start_idx+1} to {end_idx}.")
-                    except Exception as e:
-                        logging.error(f"Failed to replace lines: {e}")
-                        self.nvim.async_call(lambda: self.nvim.err_write(f"Failed to replace lines: {e}\n"))
-
-                # Schedule the replacement on the main thread
-                self.nvim.async_call(perform_replace)
-
-            # Optionally, remove diffs from the response_content before displaying
-            response_content = re.sub(diff_pattern, '', response_content, flags=re.DOTALL)
-
-        # Append end separator after processing diffs
-
         def append_end_separator():
             conv_buf[:] = conv_buf[:] + ['---', '', '']
             self.nvim.command('normal! G$')
@@ -328,8 +223,35 @@ class LLMResponsePlugin(object):
 
         self.nvim.async_call(append_end_separator)
 
+        # Apply LLM-suggested changes
+        self.apply_llm_changes(response_content)
         logging.error("fetch_and_display function completed successfully")
 
+    def apply_llm_changes(self, response_content):
+        import re
+
+        # Parse response_content for REPLACE blocks
+        replace_pattern = re.compile(
+            r'^--- REPLACE (\d+) (\d+) WITH ---\n([\s\S]+?)\n--- END ---',
+            re.MULTILINE
+        )
+
+        for start, end, new_code in replace_pattern.findall(response_content):
+            start = int(start) - 1  # Convert to 0-based index
+            end = int(end) - 1
+            new_code_lines = new_code.split('\n')
+            
+            def apply_change(s=start, e=end, code=new_code_lines):
+                try:
+                    if self.nvim.api.buf_is_valid(self.code_buffer):
+                        self.code_buffer[s:e+1] = code
+                        logging.error(f"Applied changes from lines {s+1} to {e+1}")
+                    else:
+                        logging.error("Code buffer is no longer valid.")
+                except Exception as e:
+                    logging.error(f"Failed to apply changes: {e}")
+
+            self.nvim.async_call(apply_change)
     def parse_buffer_content(self, lines):
         messages = []
         message_content = []
