@@ -18,7 +18,8 @@ can also be multiple lines
 --- END ---
 
 Note that the "old code" section has to be unique within the code you were
-given.
+given. Also, you have to include every line of code you want to replace. So you
+cannot use "..." to skip over lines.
 
 If the old code is long (more than around 50 lines), make small individual
 REPLACE statements. You can make multiple.
