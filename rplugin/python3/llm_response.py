@@ -7,7 +7,8 @@ import os
 import re
 import textwrap
 
-SYSTEM_PROMPT = """If you suggest changes to code you were given, always use the following format:
+SYSTEM_PROMPT = """If you suggest changes to code you were given, always use
+the exactly following format:
 --- REPLACE ---
 lines of old code you want to replace
 can be multiple lines
@@ -25,6 +26,12 @@ REPLACE statements. You can make multiple.
 If you instead write a piece of code from scratch, still use the template
 above. Just leave the "old code" section blank, and put your code in the "new
 code" section.
+
+However, unless you are starting without any existing code at all (as described
+above), you MUST include enough old code such that I know where to insert your
+new code.
+
+If you want to create a new file, don't use REPLACE.
 """
 
 # model name -> (temperature, top_p)
