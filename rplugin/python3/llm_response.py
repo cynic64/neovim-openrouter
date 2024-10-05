@@ -5,6 +5,14 @@ import logging
 import threading
 import os
 
+# model name -> (temperature, top_p)
+parameters = {
+    "anthropic/claude-3.5-sonnet:beta": (0.9, 0.9),
+    "openai/o1-mini": (0.7, 0.95),
+    "google/gemini-pro-1.5-exp": (1, 0.9),
+    "openai/o1-preview": (1, 1),
+}
+
 # Set up logging
 logging.basicConfig(
     filename='/tmp/nvim_llm_plugin.log',
@@ -135,7 +143,14 @@ class LLMResponsePlugin(object):
         self.nvim.async_call(get_response_start_idx)
         time.sleep(0.01)  # Wait to ensure index is retrieved
 
-        for piece in get_response(model, messages):
+        if model == None:
+            model = "anthropic/claude-3.5-sonnet:beta"
+
+        logging.error(f"Using model {model}")
+        temperature, top_p = parameters[model]
+        logging.error(f"{temperature=} {top_p=}")
+
+        for piece in get_response(model, messages, temperature, top_p):
             logging.error(f"Received piece: {piece}")
 
             # Append the piece to the response_content
@@ -215,12 +230,12 @@ class LLMResponsePlugin(object):
         self.llm_select_model(args)
 
     def llm_select_model(self, args):
+        # Name, temperature, top_p. Taken from openrouter medians.
         models = [
-            "anthropic/claude-3.5-sonnet",
+            "anthropic/claude-3.5-sonnet:beta",
             "openai/o1-mini",
             "google/gemini-pro-1.5-exp",
             "openai/o1-preview",
-            # Add more models as needed
         ]
 
         # Prepare models for Lua code

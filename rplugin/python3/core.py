@@ -7,11 +7,8 @@ home_dir = Path.home()
 with open(f"{home_dir}/.config/nvim/rplugin/python3/api_key") as f:
     OPENROUTER_API_KEY = f.read().rstrip()
 
-def get_response(model, messages):
+def get_response(model, messages, temperature, top_p):
     logging.error(f"get_response for model {model}, messages {messages}")
-
-    if not model:
-        model = 'google/gemini-pro-1.5-exp'  # Default model
 
     response = requests.post(
         url="https://openrouter.ai/api/v1/chat/completions",
@@ -21,7 +18,9 @@ def get_response(model, messages):
         data=json.dumps({
             "model": model,
             "stream": True,
-            "messages": messages
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
         }),
         stream=True
     )
