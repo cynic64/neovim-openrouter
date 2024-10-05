@@ -5,6 +5,7 @@ import logging
 import threading
 import os
 import re
+import textwrap
 
 SYSTEM_PROMPT = """If you suggest changes to code you were given, always use the following format:
 --- REPLACE ---
@@ -15,14 +16,20 @@ new code you want to replace it with
 can also be multiple lines
 --- END ---
 
-note that the "old code" section has to be unique within the code you were
-given. If there are multiple locations in the code that match the "old code"
-you gave, an error will be thrown.
+Note that the "old code" section has to be unique within the code you were
+given.
+
+If the old code is long (more than around 50 lines), make small individual
+REPLACE statements. You can make multiple.
+
+If you instead write a piece of code from scratch, still use the template
+above. Just leave the "old code" section blank, and put your code in the "new
+code" section.
 """
 
 # model name -> (temperature, top_p)
 parameters = {
-    "anthropic/claude-3.5-sonnet:beta": (0.9, 0.9),
+    "anthropic/claude-3.5-sonnet:beta": (0.7, 0.9),
     "openai/o1-mini": (0.7, 0.95),
     "google/gemini-pro-1.5-exp": (1, 0.9),
     "openai/o1-preview": (1, 1),
@@ -151,22 +158,30 @@ class LLMResponsePlugin(object):
 
     def find_multiline(self, buffer, text_lines):
         """
-        Search for a sequence of lines in the buffer that exactly matches text_lines.
+        Search for a sequence of lines in the buffer that matches text_lines, ignoring leading indentation.
         Returns a tuple (start_index, end_index) if found, else None.
         """
-        for i in range(len(buffer) - len(text_lines) + 1):
-            if buffer[i:i + len(text_lines)] == text_lines:
-                return (i, i + len(text_lines))
+        # Dedent the text_lines for comparison
+        dedented_old = [textwrap.dedent(line) for line in text_lines]
+
+        for i in range(len(buffer) - len(dedented_old) + 1):
+            window = buffer[i:i + len(dedented_old)]
+            dedented_window = [textwrap.dedent(line) for line in window]
+            if dedented_window == dedented_old:
+                return (i, i + len(dedented_old))
         return None
 
     def count_multiline_matches(self, buffer, text_lines):
         """
-        Counts how many times a sequence of lines appears in the buffer.
+        Counts how many times a sequence of lines appears in the buffer, ignoring leading indentation.
         """
         count = 0
-        for i in range(len(buffer) - len(text_lines) + 1):
-            potential_match = buffer[i:i + len(text_lines)]
-            if potential_match == text_lines:
+        dedented_old = [textwrap.dedent(line) for line in text_lines]
+
+        for i in range(len(buffer) - len(dedented_old) + 1):
+            potential_match = buffer[i:i + len(dedented_old)]
+            dedented_potential = [textwrap.dedent(line) for line in potential_match]
+            if dedented_potential == dedented_old:
                 count += 1
                 logging.error(f"|||{potential_match}||| matches |||{text_lines}||| ({i=})")
 
@@ -227,8 +242,8 @@ class LLMResponsePlugin(object):
             logging.error(f"Found {len(diffs)} diff(s) in the response.")
             for old_code, new_code in diffs:
                 # Clean and split the code blocks into lines
-                old_lines = [line.rstrip() for line in old_code.strip().split('\n')]
-                new_lines = [line.rstrip() for line in new_code.strip().split('\n')]
+                old_lines = [line for line in old_code.split('\n')]
+                new_lines = [line for line in new_code.split('\n')]
 
                 logging.error(f"Processing diff:\nOld Code:\n{old_code}\nNew Code:\n{new_code}")
 
@@ -263,8 +278,24 @@ class LLMResponsePlugin(object):
                 start, end = match
                 logging.error(f"Replacing lines {start +1} to {end} with new code.")
 
+                # Determine the indentation from the first line of the old code
+                original_indentation_match = re.match(r'(\s*)', buffer_content[start])
+                original_indentation = original_indentation_match.group(1) if original_indentation_match else ''
+
+                # Adjust the new_lines indentation
+                adjusted_new_lines = []
+                for line in new_lines:
+                    if line.strip() == '':
+                        adjusted_new_lines.append(line)
+                    elif line.lstrip() != line:
+                        # If the line already has indentation, don't add any
+                        adjusted_new_lines.append(line)
+                    else:
+                        # Otherwise, add the original indent back in.
+                        adjusted_new_lines.append(original_indentation + line)
+
                 # Define the replacement function
-                def perform_replace(start_idx=start, end_idx=end, replacement=new_lines):
+                def perform_replace(start_idx=start, end_idx=end, replacement=adjusted_new_lines):
                     try:
                         code_buf[start_idx:end_idx] = replacement
                         self.nvim.command('redraw')
@@ -280,6 +311,7 @@ class LLMResponsePlugin(object):
             response_content = re.sub(diff_pattern, '', response_content, flags=re.DOTALL)
 
         # Append end separator after processing diffs
+
         def append_end_separator():
             conv_buf[:] = conv_buf[:] + ['---', '', '']
             self.nvim.command('normal! G$')
