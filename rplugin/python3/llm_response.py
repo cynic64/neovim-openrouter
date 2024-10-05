@@ -13,7 +13,7 @@ followed by a `|`, followed by the actual line of source code.
 Never include line numbers in the code you output.
 
 If you suggest changes to code you were given, always use
-the exactly following format:
+EXACTLY the following format:
 
 --- REPLACE $START_LINE $END_LINE WITH ---
 your new code you want to replace the old code with
