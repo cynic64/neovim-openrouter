@@ -18,11 +18,12 @@ the exactly following format:
 --- REPLACE $START_LINE $END_LINE WITH ---
 your new code you want to replace the old code with
 can be multiple lines
-can be more or less lines than the old code
+can be more or less lines than the old code!
 --- END ---
 
-Replace $START_LINE and $END_LINE with the first and last line (inclusive) you
-want to be replaced with your new code.
+Replace $START_LINE and $END_LINE with the first and last line you
+want to be replaced with your new code. The range is inclusive. Make sure you
+get the range exactly right!
 
 You can specify multiple such REPLACE ranges.
 
@@ -236,11 +237,17 @@ class LLMResponsePlugin(object):
             re.MULTILINE
         )
 
-        for start, end, new_code in replace_pattern.findall(response_content):
-            start = int(start) - 1  # Convert to 0-based index
-            end = int(end) - 1
+        # Convert from string to int and to 0-based index
+        def parse(x):
+            start, end, new_code = x
+            return [int(start) - 1, int(end) - 1, new_code]
+
+        # start, end, new_code
+        replacements = list(map(parse, replace_pattern.findall(response_content)))
+        for i in range(len(replacements)):
+            start, end, new_code = replacements[i]
             new_code_lines = new_code.split('\n')
-            
+
             def apply_change(s=start, e=end, code=new_code_lines):
                 try:
                     if self.nvim.api.buf_is_valid(self.code_buffer):
@@ -252,6 +259,26 @@ class LLMResponsePlugin(object):
                     logging.error(f"Failed to apply changes: {e}")
 
             self.nvim.async_call(apply_change)
+            time.sleep(0.01)
+
+            # We probably changed the line numbers of all the code above/below,
+            # so adjust the line numbers of subsequent changes
+            for j in range(i + 1, len(replacements)):
+                other_start, other_end, other_new_code = replacements[j]
+
+                # If the other change is before the change we just made, it's fine
+                if other_end < start: continue
+
+                # Make sure there are no overlapping changes
+                if (other_start >= start and other_start <= end) \
+                        or (other_end >= start and other_end <= end):
+                    logging.error(f"Change mismatch! {start} - {end} overlaps {other_start} - {other_end}")
+
+                # Adjust
+                line_count_mismatch = len(new_code_lines) - (end - start + 1)
+                replacements[j][0] += line_count_mismatch
+                replacements[j][1] += line_count_mismatch
+            
     def parse_buffer_content(self, lines):
         messages = []
         message_content = []
