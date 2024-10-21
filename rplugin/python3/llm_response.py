@@ -4,6 +4,53 @@ import time
 import logging
 import threading
 import os
+import re
+import textwrap
+
+SYSTEM_PROMPT = """Source code will always be given to you with line numbers,
+followed by a `|`, followed by the actual line of source code.
+
+Never include line numbers in the code you output.
+
+If you suggest changes to code you were given, always use
+EXACTLY the following format:
+
+--- REPLACE $START_LINE $END_LINE WITH ---
+your new code you want to replace the old code with
+can be multiple lines
+can be more or less lines than the old code!
+--- END ---
+
+Replace $START_LINE and $END_LINE with the first and last line you
+want to be replaced with your new code. The range is inclusive. Make sure you
+get the range exactly right!
+
+You can specify multiple such REPLACE ranges.
+
+If you weren't given any code to base your response off and are starting from
+scratch, do
+
+-- REPLACE 0 0 WITH ---
+your code here
+maybe multiple lines
+--- END ---
+"""
+
+# model name -> (temperature, top_p)
+parameters = {
+    "anthropic/claude-3.5-sonnet:beta": (0.7, 0.9),
+    "openai/o1-mini": (0.7, 0.95),
+    "google/gemini-pro-1.5-exp": (1, 0.9),
+    "openai/o1-preview": (1, 1),
+}
+
+models = [
+    "anthropic/claude-3.5-sonnet:beta",
+    "openai/o1-mini",
+    "google/gemini-pro-1.5-exp",
+    "openai/o1-preview",
+]
+
 
 # Set up logging
 logging.basicConfig(
@@ -19,19 +66,31 @@ class LLMResponsePlugin(object):
         logging.error("LLMResponsePlugin initialized")
         self.conversation_buffer = None  # Store the conversation buffer number
         self.selected_text = None  # Store selected text if any
+        self.code_buffer = None  # Store the code buffer number
         self.lua_dir = os.path.dirname(os.path.abspath(__file__))
 
     @pynvim.function("LLMResponse", sync=False)
     def llm_response(self, args):
         logging.error("llm_response function called")
 
+        # Store the current buffer as the code buffer
+        self.code_buffer = self.nvim.current.buffer
+        logging.error(f"Code buffer stored: {self.code_buffer.number}")
+
         # Get the selection from register 's'
-        self.selected_text = self.nvim.funcs.getreg('s')
+        self.selected_text = self.nvim.funcs.getreg('s').rstrip()
         if self.selected_text == '':
             self.selected_text = None
             logging.error("No visual selection detected")
         else:
-            self.selected_text = f"```\n{self.selected_text.rstrip()}\n```"
+            # Prepend line numbers to every line
+            numbered_lines = []
+            for i, line in enumerate(self.selected_text.split("\n")):
+                numbered_lines.append(f"{i+1:<5}|{line}")
+
+            numbered_text = "\n".join(numbered_lines)
+            self.selected_text = f"```\n{numbered_text}\n```"
+
             logging.error(f"Selected text: {self.selected_text}")
 
         # Check if the conversation buffer exists
@@ -75,6 +134,11 @@ class LLMResponsePlugin(object):
         if self.selected_text:
             # Get current buffer content
             lines = buf[:]
+
+            # Avoid blank initial line
+            if lines and lines[0] == "":
+                lines = lines[1:]
+
             # Split selected text into lines and append
             lines.extend(self.selected_text.split('\n') + [''])
             buf[:] = lines
@@ -91,78 +155,130 @@ class LLMResponsePlugin(object):
         logging.error("llm_submit function called")
 
         # Get the conversation buffer
-        buf = self.nvim.buffers[self.conversation_buffer]
+        conv_buf = self.nvim.buffers[self.conversation_buffer]
 
         # Get the text from the buffer
-        lines = buf[:]
+        lines = conv_buf[:]
 
         logging.error(f"Full conversation from buffer: {lines}")
 
         # Parse the buffer content into model and messages
         model, messages = self.parse_buffer_content(lines)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
 
         logging.error(f"Parsed model: {model}")
         logging.error(f"Parsed messages: {messages}")
 
-        # Start a new thread to fetch and display the response
-        threading.Thread(target=self.fetch_and_display, args=(buf, model, messages)).start()
+        # Pass both conversation and code buffers
+        threading.Thread(target=self.fetch_and_display, args=(conv_buf, self.code_buffer, model, messages)).start()
 
-    def fetch_and_display(self, buf, model, messages):
+    def fetch_and_display(self, conv_buf, code_buf, model, messages):
         logging.error("fetch_and_display function started")
         response_content = ''
 
+        if model is None:
+            model = models[0]
+
+        temperature, top_p = parameters[model]
+
         # Append separator and empty line in the main thread
         def append_separator():
-            buf[:] = buf[:] + ['---', '']
+            conv_buf[:] = conv_buf[:] + ['---', '']
             self.nvim.command(f"normal! G$")
             self.nvim.command('redraw')
 
-        # Get the index where the response starts
-        response_start_idx = None
+        self.nvim.async_call(append_separator)
 
+        response_start_idx = None
+        # Have to do this through async_call otherwise nvim is unhappy
         def get_response_start_idx():
             nonlocal response_start_idx
-            response_start_idx = len(buf[:])
+            response_start_idx = len(conv_buf[:])
 
-        # Append separator and get response start index
-        self.nvim.async_call(append_separator)
-        time.sleep(0.01)  # Wait to ensure separator is appended
+        # Wait to make sure separator gets appended
+        time.sleep(0.01)
         self.nvim.async_call(get_response_start_idx)
-        time.sleep(0.01)  # Wait to ensure index is retrieved
 
-        for piece in get_response(model, messages):
+        # Collect the response content piece by piece
+        for piece in get_response(model, messages, temperature, top_p):
             logging.error(f"Received piece: {piece}")
-
-            # Append the piece to the response_content
             response_content += piece
 
-            # Since we're in a different thread, schedule buffer updates in the main thread
-            def update_buffer():
-                # Update the buffer from response_start_idx onwards
-                buffer_content = buf[:response_start_idx]
-                # Append response_content, splitting it into lines
-                buffer_content.extend(response_content.split('\n'))
-                buf[:] = buffer_content
-                # Move the cursor to the end
-                self.nvim.command(f"normal! G$")
+            # Append the piece to the buffer
+            def update_buffer_with_piece(p=piece):
+                buffer_content = conv_buf[:response_start_idx]
+                buffer_content.extend(response_content.split("\n"))
+
+                conv_buf[:] = buffer_content
+                self.nvim.command('normal! G$')
                 self.nvim.command('redraw')
 
-                logging.error(f"Updated buffer with response content")
+            self.nvim.async_call(update_buffer_with_piece)
+            time.sleep(0.01)  # Small delay to make the output visible
 
-            self.nvim.async_call(update_buffer)
-            # Small delay to make the output visible
-            time.sleep(0.01)
-
-        # After the response is complete, append '---\n\n' so you can start typing
         def append_end_separator():
-            buf[:] = buf[:] + ['---', '', '']
-            self.nvim.command(f"normal! G$")
+            conv_buf[:] = conv_buf[:] + ['---', '', '']
+            self.nvim.command('normal! G$')
             self.nvim.command('redraw')
+            logging.error("Appended end separator after response.")
 
         self.nvim.async_call(append_end_separator)
 
+        # Apply LLM-suggested changes
+        self.apply_llm_changes(response_content)
         logging.error("fetch_and_display function completed successfully")
 
+    def apply_llm_changes(self, response_content):
+        import re
+
+        # Parse response_content for REPLACE blocks
+        replace_pattern = re.compile(
+            r'^--- REPLACE (\d+) (\d+) WITH ---\n([\s\S]+?)\n--- END ---',
+            re.MULTILINE
+        )
+
+        # Convert from string to int and to 0-based index
+        def parse(x):
+            start, end, new_code = x
+            return [int(start) - 1, int(end) - 1, new_code]
+
+        # start, end, new_code
+        replacements = list(map(parse, replace_pattern.findall(response_content)))
+        for i in range(len(replacements)):
+            start, end, new_code = replacements[i]
+            new_code_lines = new_code.split('\n')
+
+            def apply_change(s=start, e=end, code=new_code_lines):
+                try:
+                    if self.nvim.api.buf_is_valid(self.code_buffer):
+                        self.code_buffer[s:e+1] = code
+                        logging.error(f"Applied changes from lines {s+1} to {e+1}")
+                    else:
+                        logging.error("Code buffer is no longer valid.")
+                except Exception as e:
+                    logging.error(f"Failed to apply changes: {e}")
+
+            self.nvim.async_call(apply_change)
+            time.sleep(0.01)
+
+            # We probably changed the line numbers of all the code above/below,
+            # so adjust the line numbers of subsequent changes
+            for j in range(i + 1, len(replacements)):
+                other_start, other_end, other_new_code = replacements[j]
+
+                # If the other change is before the change we just made, it's fine
+                if other_end < start: continue
+
+                # Make sure there are no overlapping changes
+                if (other_start >= start and other_start <= end) \
+                        or (other_end >= start and other_end <= end):
+                    logging.error(f"Change mismatch! {start} - {end} overlaps {other_start} - {other_end}")
+
+                # Adjust
+                line_count_mismatch = len(new_code_lines) - (end - start + 1)
+                replacements[j][0] += line_count_mismatch
+                replacements[j][1] += line_count_mismatch
+            
     def parse_buffer_content(self, lines):
         messages = []
         message_content = []
@@ -210,14 +326,6 @@ class LLMResponsePlugin(object):
         self.llm_select_model(args)
 
     def llm_select_model(self, args):
-        models = [
-            "google/gemini-pro-1.5-exp",
-            "anthropic/claude-3.5-sonnet",
-            "openai/o1-mini",
-            "openai/o1-preview",
-            # Add more models as needed
-        ]
-
         # Prepare models for Lua code
         # Use JSON to safely serialize the list
         import json
@@ -233,14 +341,14 @@ class LLMResponsePlugin(object):
     def llm_model_selected(self, args):
         selected_model = args[0]
         # Insert 'MODEL: selected_model' into the minibuffer
-        buf = self.nvim.buffers[self.conversation_buffer]
+        conv_buf = self.nvim.buffers[self.conversation_buffer]
         # Insert or replace the model line at the top of the buffer
-        lines = buf[:]
+        lines = conv_buf[:]
         model_line = 'MODEL: ' + selected_model
         if lines and lines[0].startswith('MODEL: '):
-            buf[0] = model_line
+            conv_buf[0] = model_line
         else:
-            buf[0:0] = [model_line, '']
+            conv_buf[0:0] = [model_line, '']
         logging.error(f"Model selected: {selected_model}")
         # Inform the user about the selection
         self.nvim.out_write(f"Model selected: {selected_model}\n")
