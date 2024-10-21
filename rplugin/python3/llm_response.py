@@ -31,7 +31,7 @@ class LLMResponsePlugin(object):
             self.selected_text = None
             logging.error("No visual selection detected")
         else:
-            self.selected_text = f"```\n{self.selected_text}\n```"
+            self.selected_text = f"```\n{self.selected_text.rstrip()}\n```"
             logging.error(f"Selected text: {self.selected_text}")
 
         # Check if the conversation buffer exists

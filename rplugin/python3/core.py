@@ -3,6 +3,11 @@ import json
 import logging
 from pathlib import Path 
 
+PROXIES = {
+    "https": "http://127.0.0.1:3128",
+    "http": "http://127.0.0.1:3128"
+}
+
 home_dir = Path.home()
 with open(f"{home_dir}/.config/nvim/rplugin/python3/api_key") as f:
     OPENROUTER_API_KEY = f.read().rstrip()
@@ -13,7 +18,10 @@ def get_response(model, messages):
     if not model:
         model = 'google/gemini-pro-1.5-exp'  # Default model
 
+    logging.error("ding dong")
+
     response = requests.post(
+        proxies=PROXIES,
         url="https://openrouter.ai/api/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
